@@ -1,0 +1,202 @@
+<?php
+
+/**
+ * @file
+ *
+ */
+
+/**
+ * Implements hook_menu_alter().
+ */
+function module_permissions_menu_alter(&$items) {
+  // NOTE : Remember to flush the cache if you change/add anything here.
+  // Have a look at the URL redirect module for other redirects.
+
+  // The normal "administer permissions" exposes additional user permissions
+  // areas from core and othr modules which we don't want to expose to our user.
+  // We change the default to our own to limit this to just the module permissions.
+  $items['admin/people/permissions']['access arguments'] = array('administer module permissions');
+
+  // Change the menu configuration permissions to ours
+  $items['admin/structure/menu']['access arguments'] = array('administer menu configurations');
+
+  // You can't dump the whole $items variable, it's to big.
+  // Do it with one menu item at a time
+  // dpm($items['admin/people/permissions']);
+
+}
+
+/**
+ * Implements hook_permission().
+ */
+function module_permissions_permission() {
+
+  $permissions = array();
+
+  // Global permissions. Leave the 'module' => info out to make it global
+  $permissions['administer module permissions'] = array(
+  	  'title' => 'Administer module permissions',
+      'description' => 'Users that can administer modules must also have this permission',
+  );
+
+  $permissions['administer menu configurations'] = array(
+      'title' => 'Administer menu configurations',
+      'description' => 'Allow users to access the menu configuration pages.<br />
+                        Users with Administer menus and menu items will still be able to add content to a menu.',
+  );
+
+  // Get a list of all the modules implementing a hook_permission()
+  // and sort by display name.
+  $module_info = system_get_info('module');
+  $modules = array();
+  foreach (module_implements('permission') as $module) {
+    $modules[$module] = $module_info[$module]['name'];
+  }
+  asort($modules);
+
+  // Create the permisions
+  foreach ($modules as $module=>$name) {
+    $perm_string = 'manage '.$module.' permisions';
+    $perm_title = 'Manage permisions for <em>'.$name.'</em>';
+    $permissions[$perm_string] = array(
+        'title' => $perm_title,
+        'module' => $module,
+    );
+  }
+
+  return $permissions;
+}
+
+/**
+ * Impliments hook_form_FORMID_alter()
+ *
+ * All we are going to do is alter the form to match the current
+ * user's permisions for the modules that the user can manage permissions for.
+ * All of the information we need is in the $form array so it turns out very
+ * light weight.
+ *
+ * If the user doesn't have the right to manage a perticular permission
+ * that permission is also omited.
+ */
+function module_permissions_form_user_admin_permissions_alter(&$form, &$form_state, $form_id) {
+
+  global $user;
+
+  if ($user->uid == 1) {
+    return;
+  }
+
+  // All the roles the current user belongs to
+  $role_ids = array_keys($user->roles);
+
+  // The last array value will be the highest role this user has
+  $i = array_slice($role_ids,-1,1,FALSE);
+  $prime_role = $i[0];
+
+  // All the permisions the current user has
+  $user_permissions = array();
+  $new_permissions = array();
+  foreach ($role_ids as $key=>$rid) {
+    $new_permissions = $form['checkboxes'][$rid]['#default_value'];
+    $user_permissions = array_merge($user_permissions, $new_permissions);
+  }
+  $user_permissions = array_unique($user_permissions);
+
+  // Get this module's permissions this user can manage.
+  $module_permissions = module_permissions_permission();
+
+  $modules = array();
+  foreach ($module_permissions as $permission=>$value) {
+    // Ignore the global permissions
+    if (isset($value['module'])) {
+      if (in_array($permission, $user_permissions)) {
+        $modules[] = $value['module'];
+      }
+    }
+  }
+
+  // Start rebuilding the form
+  $permissions = array();
+  $remove = FALSE;
+  $options = array();
+  $default_permissions = $form['checkboxes'][$prime_role]['#default_value'];
+
+  foreach ($form['permission'] as $key=>$value) {
+    // If the key is numeric it is the Module name
+    if (is_numeric($key)) {
+      if (in_array($value['#id'], $modules)) {
+        $remove = FALSE;
+      } else {
+        $remove = TRUE;
+      }
+    }
+
+    if ($remove == FALSE) {
+      if (is_numeric($key)) {
+        $permissions[] = $value;
+      } else {
+        // If the user doesn't have this permission then omit it
+        if (in_array($key,$default_permissions)) {
+          $permissions[$key] = $value;
+          $options[$key] = $value;
+        }
+      }
+    }
+
+  }
+
+  $form['permission'] = $permissions;
+
+  $role_names = array();
+  $role_names['#type'] = $form['role_names']['#type'];
+  $checkboxes = array();
+
+  foreach ($form['role_names']['#value'] as $role_id=>$role_name) {
+
+    // Users cannot change their own permissions.
+    // It can only be changed by someone with a higher role.
+    if ($role_id == $prime_role) {
+      break;
+    }
+
+    $role_names['#value'][$role_id] = $form['role_names']['#value'][$role_id];
+    $role_names[$role_id] = $form['role_names'][$role_id];
+
+    $checkboxes[$role_id] = $form['checkboxes'][$role_id];
+    $checkboxes[$role_id]['#options'] = $options;
+
+  }
+
+  $form['role_names'] = $role_names;
+  $form['checkboxes'] = $checkboxes;
+
+  // Hide the filter option
+  $form['module_filter']['#access'] = FALSE;
+
+}
+
+/**
+ * Load our own modified JS file if the Admin Menu module exists because
+ * Admin Menu adds a JS that checks for required double permissions
+ * and will throw an exception if those permissions are not in the new list
+ *
+ * @param unknown $javascript
+ */
+function module_permissions_js_alter(&$javascript) {
+
+  global $user;
+
+  if ($user->uid == 1) {
+    return;
+  }
+
+  if (module_exists('admin_menu')) {
+    // Get rid of the Admin Menu module's JS file and load our own
+    $file = drupal_get_path('module', 'admin_menu').'/admin_menu.admin.js';
+    unset($javascript[$file]);
+
+    $file = drupal_get_path('module', 'module_permissions').'/module_permissions_admin_menu.admin.js';
+    drupal_add_js($file,'file');
+
+  }
+}

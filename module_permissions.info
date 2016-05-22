@@ -1,0 +1,6 @@
+name = Module permissions
+description = Give roles the ability to manage permissions per module
+core = 7.x
+
+version = "7.x-1.0-alpha1"
+core = "7.x"
